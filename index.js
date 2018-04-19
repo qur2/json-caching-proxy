@@ -86,10 +86,11 @@ class JsonCachingProxy {
 	 * @returns {string} A unique hash key that identifies the request
 	 */
 	genKeyFromExpressReq (req) {
+		const authCookie = Boolean(req.headers.cookie && req.headers.cookie.includes('auth='))
 		return this.genKeyFromHarReq({
 			method: req.method,
 			url: req.url,
-			queryString: this.convertToNameValueList(req.query),
+			queryString: this.convertToNameValueList(Object.assign({authCookie}, req.query)),
 			postData: {text: req.body && req.body.length > 0 ? req.body.toString('utf8') : ''}
 		});
 	}
@@ -106,6 +107,7 @@ class JsonCachingProxy {
 		let reqMimeType = req.get('Content-Type');
 		let resMimeType = res.get('Content-Type') || 'text/plain';
 		let encoding = (/^text\/|^application\/(javascript|json)/).test(resMimeType) ? 'utf8' : 'base64';
+		let authCookie = Boolean(req.headers.cookie && req.headers.cookie.includes('auth='))
 
 		let entry = {
 			request: {
@@ -114,7 +116,7 @@ class JsonCachingProxy {
 				url: req.url,
 				cookies: this.convertToNameValueList(req.cookies),
 				headers: this.convertToNameValueList(req.headers),
-				queryString: this.convertToNameValueList(req.query),
+				queryString: this.convertToNameValueList(Object.assign({authCookie}, req.query)),
 				headersSize: -1,
 				bodySize: -1
 			},

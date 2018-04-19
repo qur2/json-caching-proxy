@@ -52,6 +52,11 @@ class JsonCachingProxy {
 		}
 	}
 
+	modifyCookieExpireDate(cookie, year) {
+		year = year || (new Date()).getFullYear() + 1
+		return cookie.replace(/(Expires=\w{3}, \d{2} \w{3}) \w{4}/, '$1 ' + year)
+	}
+
 	/**
 	 * Returns an Object's own  properties into an array of name-value pair objects
 	 * @param {Object} obj
@@ -278,6 +283,7 @@ class JsonCachingProxy {
 	 * @returns {JsonCachingProxy}
 	 */
 	addCachingRoute () {
+		let modifyCookieExpireDate = this.modifyCookieExpireDate.bind(this)
 		this.app.use('/', (req, res, next) => {
 			if (!this.options.dataPlayback) {
 				next();
@@ -294,6 +300,10 @@ class JsonCachingProxy {
 					let encoding = response.content.encoding || 'utf8';
 
 					headerList.forEach(function (header) {
+						let value = header.value
+						if (header.name === 'set-cookie' && value && value[0]) {
+							value[0] = modifyCookieExpireDate(value[0])
+						}
 						res.set(header.name, header.value);
 					});
 

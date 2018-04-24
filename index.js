@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const express = require('express');
 const proxy = require('express-http-proxy');
 const bodyParser = require('body-parser');
+const cookieParser = require('cookie-parser');
 const urlUtil = require('url');
 const chalk = require('chalk');
 
@@ -21,6 +22,8 @@ class JsonCachingProxy {
 			middlewareList: [],
 			excludedRouteMatchers: [],
 			cacheBustingParams: [],
+			cacheBustingBodyParams: [],
+			cacheCookieParams: [],
 			cacheEverything: false,
 			dataPlayback: true,
 			dataRecord: true,
@@ -42,6 +45,8 @@ class JsonCachingProxy {
 		this.routeCache = {};
 
 		this.excludedParamMap = this.options.cacheBustingParams.reduce((map, param) => { map[param] = true; return map }, {});
+		this.excludedBodyParamMap = this.options.cacheBustingBodyParams.reduce((map, param) => { map[param] = true; return map }, {});
+		this.cookieParamMap = this.options.cacheCookieParams.reduce((map, param) => { map[param] = true; return map }, {});
 
 		if (this.options.showConsoleOutput) {
 			this.log = console.log;
@@ -67,22 +72,51 @@ class JsonCachingProxy {
 	}
 
 	/**
+	 * Returns an Object's own  properties into an array of name-value pair objects
+	 * @param {Object} obj
+	 * @returns {Object[]}
+	 */
+	convertToObject (arr) {
+		if (!Array.isArray(arr)) return {}
+		let obj = {}
+		for (let {name, value} of arr) {
+			obj[name] = value
+		}
+		return obj
+	}
+
+	/**
 	 * Generate a unique hash key from a har file entry's request object: TODO: Include headers?
 	 * @param {Object} harEntryReq - HAR request object
 	 * @returns {Object} A unique key, hash tuple that identifies the request
 	 */
 	genKeyFromHarReq (harEntryReq) {
-		let { method, url, queryString=[], postData={text: ''} } = harEntryReq;
+		let { method, url, queryString=[], postData={text: ''}, cookies=[] } = harEntryReq;
 		let uri = urlUtil.parse(url).pathname;
-		let postParams = postData.text;
 
+		// query string filtering
 		queryString = queryString.filter(param => !this.excludedParamMap[param.name]);
 
-		let plainText = `${method} ${uri} ${JSON.stringify(queryString)} ${postParams}`;
+		// post data filtering
+		let postParams = postData.text;
+		let postMimeType = postData.mimeType;
+		if (postMimeType === 'application/json') {
+			let filteredPostParams = this.convertToNameValueList(JSON.parse(postParams)).filter(
+				param => !this.excludedBodyParamMap[param.name]
+			);	
+			postParams = JSON.stringify(this.convertToObject(filteredPostParams));
+		}
+
+		// cookie existence check
+		let cookieParams = this.convertToObject(cookies
+			.filter(cookie => this.cookieParamMap[cookie.name])
+			.map(({name}) => ({name, value: true}))
+		);
+
+		let plainText = `${method} ${uri} ${JSON.stringify(cookieParams)} ${JSON.stringify(queryString)} ${postParams}`;
 		let hash = crypto.createHash('md5').update(plainText).digest("hex");
 		let key = `${method} ${uri} ${hash}`;
-
-		return {key, hash};
+		return {key, hash, plainText};
 	}
 
 	/**
@@ -91,12 +125,15 @@ class JsonCachingProxy {
 	 * @returns {string} A unique hash key that identifies the request
 	 */
 	genKeyFromExpressReq (req) {
-		const authCookie = Boolean(req.headers.cookie && req.headers.cookie.includes('auth='))
 		return this.genKeyFromHarReq({
 			method: req.method,
 			url: req.url,
-			queryString: this.convertToNameValueList(Object.assign({authCookie}, req.query)),
-			postData: {text: req.body && req.body.length > 0 ? req.body.toString('utf8') : ''}
+			cookies: this.convertToNameValueList(req.cookies),
+			queryString: this.convertToNameValueList(req.query),
+			postData: {
+				text: req.body && req.body.length > 0 ? req.body.toString('utf8') : '',
+				mimeType: (req.get('Content-Type') || '').split(';').shift()
+			}
 		});
 	}
 
@@ -112,7 +149,6 @@ class JsonCachingProxy {
 		let reqMimeType = req.get('Content-Type');
 		let resMimeType = res.get('Content-Type') || 'text/plain';
 		let encoding = (/^text\/|^application\/(javascript|json)/).test(resMimeType) ? 'utf8' : 'base64';
-		let authCookie = Boolean(req.headers.cookie && req.headers.cookie.includes('auth='))
 
 		let entry = {
 			request: {
@@ -121,7 +157,7 @@ class JsonCachingProxy {
 				url: req.url,
 				cookies: this.convertToNameValueList(req.cookies),
 				headers: this.convertToNameValueList(req.headers),
-				queryString: this.convertToNameValueList(Object.assign({authCookie}, req.query)),
+				queryString: this.convertToNameValueList(req.query),
 				headersSize: -1,
 				bodySize: -1
 			},
@@ -265,6 +301,7 @@ class JsonCachingProxy {
 	 */
 	addBodyParser () {
 		this.app.use(bodyParser.raw({type: '*/*', limit: '100mb'}));
+		this.app.use(cookieParser())
 
 		// Remove the body if there is no body content. Some sites check for malformed requests
 		this.app.use((req, res, next) => {
@@ -288,10 +325,11 @@ class JsonCachingProxy {
 			if (!this.options.dataPlayback) {
 				next();
 			} else {
-				let {key, hash} = this.genKeyFromExpressReq(req);
+				let {key, hash, plainText} = this.genKeyFromExpressReq(req);
 				let entry = this.routeCache[key];
 
 				if (!(entry && entry.response && entry.response.content)) {
+					// console.log('cache miss', key, plainText)
 					next();
 				} else {
 					let response = entry.response;
@@ -389,6 +427,8 @@ class JsonCachingProxy {
 		this.log(`Proxy response header: \t${chalk.bold(this.options.proxyHeaderIdentifier)}`);
 		this.log(`Cache all: \t\t${chalk.bold(this.options.cacheEverything)}`);
 		this.log(`Cache busting params: \t${chalk.bold(this.options.cacheBustingParams)}`);
+		this.log(`Cache busting body params: \t${chalk.bold(this.options.cacheBustingBodyParams)}`);
+		this.log(`Cache cookie params: \t${chalk.bold(this.options.cacheCookieParams)}`);
 		this.log(`Excluded routes: `);
 		this.options.excludedRouteMatchers.forEach((regExp) => {
 			this.log(`\t\t\t${chalk.bold(regExp)}`)

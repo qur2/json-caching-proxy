@@ -26,6 +26,8 @@ program
 	.option('-p, --port [number]', 'port for the local proxy server', parseInt)
 	.option('-H, --har [path]', 'load entries from a HAR file and hydrate the cache')
 	.option('-b, --bust [list]', 'a list of cache busting query params to ignore. (e.g. --bust _:cacheSlayer:time:dc)', list)
+	.option('-d, --bustBody [list]', 'a list of cache busting body params to ignore. (e.g. --bustBody zoneId:epochTime)', list)
+	.option('-k, --cookieParams [list]', 'a list of cookie keys whose existence should count as param. (e.g. --cookieParams auth:session)', list)
 	.option('-e, --exclude [regex]', 'exclude specific routes from cache, (e.g. --exclude "GET /api/keep-alive/.*")')
 	.option('-a, --all', 'cache everything from the remote server (Default is to cache just JSON responses)')
 	.option('-P, --disablePlayback', 'disables cache playback')
@@ -57,6 +59,8 @@ if (!remoteServerUrl) {
 let proxyPort = configOptions.proxyPort ? parseInt(configOptions.proxyPort, 10) : program.port;
 let inputHarFile = configOptions.inputHarFile || program.har;
 let cacheBustingParams = configOptions.cacheBustingParams ? configOptions.cacheBustingParams : program.bust;
+let cacheBustingBodyParams = configOptions.cacheBustingBodyParams ? configOptions.cacheBustingBodyParams : program.bustBody;
+let cacheCookieParams = configOptions.cacheCookieParams ? configOptions.cacheCookieParams : program.cookieParams;
 let commandPrefix = configOptions.commandPrefix || program.cmdPrefix;
 let proxyHeaderIdentifier = configOptions.proxyHeaderIdentifier || program.header;
 let cacheEverything = isDef(configOptions.cacheEverything) ? configOptions.cacheEverything : isDef(program.all) ? program.all : false;
@@ -88,6 +92,8 @@ let jsonCachingProxy = new JsonCachingProxy({
 	proxyPort,
 	cacheEverything,
 	cacheBustingParams,
+	cacheBustingBodyParams,
+	cacheCookieParams,
 	excludedRouteMatchers,
 	dataPlayback,
 	dataRecord,
